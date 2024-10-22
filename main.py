@@ -35,61 +35,80 @@ xgboost_SMOTE_model = load_model('xgboost_SMOTE.pkl')
 
 xgboost_featureEngineered_model = load_model('xgboost_featureEngineered.pkl')
 
+Random_forest_featureEngineered_model = load_model('rf_featureEngineered.pkl')
 
 def prepare_input(credit_score, location, gender, age, tenure, balance,
                   num_of_products, has_credit_card, is_active_member,
                   estimated_salary):
 
-  input_dict = {
-      'CreditScore': credit_score,
-      'Age': age,
-      'Tenure': tenure,
-      'Balance': balance,
-      'NumOfProducts': num_of_products,
-      'HasCrCard': int(has_credit_card),
-      'IsActiveMember': int(is_active_member),
-      'EstimatedSalary': estimated_salary,
-      'Geography_France': 1 if location == 'France' else 0,
-      'Georgraphy_Germany': 1 if location == 'Germany' else 0,
-      'Georgraphy_Spain': 1 if location == 'Spain' else 0,
-      'Gender_Male': 1 if gender == 'Male' else 0,
-      'Gender_Female': 1 if gender == 'Female' else 0
-  }
+    input_dict = {
+        'CreditScore': credit_score,
+        'Age': age,
+        'Tenure': tenure,
+        'Balance': balance,
+        'NumOfProducts': num_of_products,
+        'HasCrCard': int(has_credit_card),
+        'IsActiveMember': int(is_active_member),
+        'EstimatedSalary': estimated_salary,
+        'Geography_France': 1 if location == 'France' else 0,
+        'Geography_Germany': 1 if location == 'Germany' else 0,
+        'Geography_Spain': 1 if location == 'Spain' else 0,
+        'Gender_Male': 1 if gender == 'Male' else 0,
+        'Gender_Female': 1 if gender == 'Female' else 0
+    }
+    # Feature engineering
+    input_dict['CLV'] = tenure * num_of_products * is_active_member
+    input_dict['TenureAgeRatio'] = tenure / age if age != 0 else 0
+    input_dict[
+        'ProductTimeRatio'] = num_of_products / tenure if tenure != 0 else 0
+    input_dict[
+        'BalanceStabilityRatio'] = balance / estimated_salary if estimated_salary != 0 else 0
 
-  input_df = pd.DataFrame([input_dict])
-  return input_df, input_dict
+    # Age group features
+    input_dict['AgeGroup_Middle Age'] = 1 if 30 <= age < 50 else 0
+    input_dict['AgeGroup_Senior'] = 1 if 50 <= age < 65 else 0
+    input_dict['AgeGroup_Elderly'] = 1 if age >= 65 else 0
+    input_df = pd.DataFrame([input_dict])
+    return input_df, input_dict
 
 
 def make_predictions(input_df, input_dict):
-  probabilities = {
-      'XGBOOST': xgboost_model.predict_proba(input_df)[0][1],
-      'Random Forest': random_forest_model.predict_proba(input_df)[0][1],
-      'K-Nearest Neighbors': knn_model.predict_proba(input_df)[0][1],
-  }
+    # Reorder input_df to match the feature order the model expects
+    expected_feature_order = xgboost_SMOTE_model.get_booster().feature_names
+    input_df = input_df[expected_feature_order]
+    probabilities = {
+        'Random forest feature engineered':
+        Random_forest_featureEngineered_model.predict_proba(input_df)[0][1],
+        'XGBOOST SMOTE':
+        xgboost_SMOTE_model.predict_proba(input_df)[0][1],
+        'XGBOOST feature engineered':
+        xgboost_featureEngineered_model.predict_proba(input_df)[0][1],
+    }
 
-  avg_probability = np.mean(list(probabilities.values()))
+    avg_probability = np.mean(list(probabilities.values()))
 
-  col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-  with col1:
-    fig = ut.create_gauge_chart(avg_probability)
-    st.plotly_chart(fig, use_container_width=True)
-    st.write(
-        f"The customer has a {avg_probability * 100:.2f}% chance of churning.")
+    with col1:
+        fig = ut.create_gauge_chart(avg_probability)
+        st.plotly_chart(fig, use_container_width=True)
+        st.write(
+            f"The customer has a {avg_probability * 100:.2f}% chance of churning."
+        )
 
-  with col2:
-    fig = ut.create_model_probability_chart(probabilities)
-    st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        fig = ut.create_model_probability_chart(probabilities)
+        st.plotly_chart(fig, use_container_width=True)
 
-  st.markdown("### Model Probabilities")
-  for model, prob in probabilities.items():
-    st.write(f"{model} {prob}")
-  st.write(f"Average Probability: {avg_probability}")
-  return avg_probability
+    st.markdown("### Model Probabilities")
+    for model, prob in probabilities.items():
+        st.write(f"{model} {prob}")
+    st.write(f"Average Probability: {avg_probability}")
+    return avg_probability
 
 
 def explain_prediction(probability, input_dict, surname):
-  prompt = f"""You are an expert data scientist at a bank, specializing in interpreting and explaining predictions of machine learning models.
+    prompt = f"""You are an expert data scientist at a bank, specializing in interpreting and explaining predictions of machine learning models related to churning.
 
 Your machine learning model has predicted that a customer named {surname} has a {round(probability * 100, 1)}% probability of churning, based on the information provided below.
 
@@ -122,27 +141,38 @@ Below are the summary statistics for customers who churned:
 Below are the summary statistics for customers who did not churn:
 {df[df['Exited'] == 0].describe()}
 
-- If the customer has over a 40% risk of churning, generate a 3-sentence explanation of why they are at risk of churning.
-- If the customer has less than a 40% risk of churning, generate a 3-sentence explanation of why they might not be at risk of churning.
+### Instructions:
+1. **For high-risk customers** (more than 50% chance of churning), provide a concise 3-paragraph explanation.
+   - In the **first paragraph**, state the customer's churn risk (high or low) and their probability of churning.
+   - In the **second paragraph**, describe the most important factors contributing to the churn risk or retention.
+   - In the **third paragraph**, provide recommended actions the relationship manager can take to retain or further engage the customer.
+
+2. **For low-risk customers** (less than 50% chance of churning), follow the same structure:
+   - Paragraph 1: State the customer’s churn risk and probability.
+   - Paragraph 2: Describe the factors supporting their retention.
+   - Paragraph 3: Provide suggestions to enhance their loyalty.
+
+### Formatting Guidelines:
+- **Use simple, clear sentences** and avoid unnecessary complexity.
+- Keep each paragraph concise and focused on actionable insights.
+- Your tone should be **objective, concise, and actionable**, directly addressing the relationship manager.
+- Avoid using "I" or "you" and speak only in the **third person**.
 
 
-Your explanation should be based on the customer's information, the summary statistics of churned and non-churned customers, and the feature importances provided.
-
-Do not mention the probability of churning, the machine learning model, or use phrases like "Based on the machine learning model's predictions and top 10 most important features". Simply explain the prediction directly.
-
+Now generate your response following the structure and guidelines provided.
 
 """
 
-  print("EXPLANATION PROMPT", prompt)
+    print("EXPLANATION PROMPT", prompt)
 
-  raw_response = client.chat.completions.create(
-      model="llama-3.2-3b-preview",
-      messages=[{
-          "role": "user",
-          "content": prompt
-      }],
-  )
-  return raw_response.choices[0].message.content
+    raw_response = client.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[{
+            "role": "user",
+            "content": prompt
+        }],
+    )
+    return raw_response.choices[0].message.content
 
 
 def generate_email(probability, input_dict, explanation, surname):
